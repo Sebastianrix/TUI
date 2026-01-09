@@ -29,7 +29,7 @@
   var w, h, c;
 
   var UI = {
-    TOP_RESERVED: 3,   // y=0 header, y=1..2 button bar
+    TOP_RESERVED: 2,   // y=0 header, y=1..2 button bar
     BUTTON_Y: 1,
     BUTTON_H: 2,
     PAGER_Y: null,     // h-3
@@ -62,7 +62,7 @@
   // INIT
   // ====================================================
   function init () {
-    ap37.setTextSize(11);
+    ap37.setTextSize(16);
 
     w = ap37.getScreenWidth();
     h = ap37.getScreenHeight();
@@ -71,8 +71,12 @@
     UI.FOOTER_Y = h - 1;
     UI.STATUS_Y = h - 2;
     UI.PAGER_Y  = h - 3;
-    UI.CONTENT_Y0 = UI.TOP_RESERVED;
+    UI.CONTENT_Y0 = UI.BUTTON_Y + UI.BUTTON_H;
     UI.CONTENT_Y1 = UI.PAGER_Y - 1;
+
+// (optional keep this if you still use TOP_RESERVED elsewhere)
+UI.TOP_RESERVED = UI.CONTENT_Y0;
+
 
     applyScheme(state.schemeIndex);
 
@@ -178,7 +182,7 @@
       if (state.inBoot) return;
 
       // top zone
-      if (y >= 0 && y < UI.TOP_RESERVED) {
+        if (y >= 0 && y < (UI.BUTTON_Y + UI.BUTTON_H)) {
         buttonBar.onTouch(x, y);
         return;
       }
@@ -212,80 +216,79 @@
   }
 
   // ====================================================
-  // BUTTON BAR (2 rows tall)
-  // ====================================================
-  var buttonBar = {
-    buttons: [],
+// BUTTON BAR (2 rows tall hitbox, 1 row visual)
+// ====================================================
+var buttonBar = {
+  buttons: [],
 
-    build: function () {
-      function labelFX()  { return state.fx ? '[FX*]' : '[FX ]'; }
-      function labelW()   { return state.wordGlitch ? '[W*]' : '[W ]'; }
-      function labelL()   { return state.lineGlitch ? '[L*]' : '[L ]'; }
-      function labelBG()  { return '[BG' + (state.bgMode === 0 ? 'F' : state.bgMode === 1 ? 'G' : 'X') + ']'; }
-      function labelVIEW(){ return (state.view === 'menu') ? '[APPS]' : '[MENU]'; }
+  build: function () {
+    function labelFX()  { return state.fx ? '[FX*]' : '[FX ]'; }
+    function labelW()   { return state.wordGlitch ? '[W*]' : '[W ]'; }
+    function labelL()   { return state.lineGlitch ? '[L*]' : '[L ]'; }
+    function labelBG()  { return '[BG' + (state.bgMode === 0 ? 'F' : state.bgMode === 1 ? 'G' : 'X') + ']'; }
+    function labelVIEW(){ return (state.view === 'menu') ? '[APPS]' : '[MENU]'; }
 
-      buttonBar.buttons = [];
-      var x = w - 1;
+    buttonBar.buttons = [];
+    var x = w - 1;
 
-      function push(text, fn) {
-        var len = text.length;
-        var x0 = x - len + 1;
-        var xf = x + 1;
-        buttonBar.buttons.push({ x0:x0, xf:xf, text:text, on:fn });
-        x = x0 - 1;
-      }
-
-      push('[BOOT]', bootOnly);
-      push(labelBG(), cycleBackgroundMode);
-      push(labelL(), toggleLineGlitch);
-      push(labelW(), toggleWordGlitch);
-      push(labelFX(), toggleFX);
-      push('[SCM]', cycleScheme);
-      push(labelVIEW(), function () {
-        switchView(state.view === 'menu' ? 'apps' : 'menu');
-      });
-    },
-
-    draw: function () {
-      buttonBar.build();
-
-      // clear button rows (restore from base)
-      for (var ry = 0; ry < UI.BUTTON_H; ry++) {
-        background.restoreLine(UI.BUTTON_Y + ry);
-      }
-
-      for (var i = 0; i < buttonBar.buttons.length; i++) {
-        var b = buttonBar.buttons[i];
-        var col = COL_DIM;
-        if (b.text === '[FX*]' || b.text === '[W*]' || b.text === '[L*]') col = COL_MAIN;
-
-        for (var ry2 = 0; ry2 < UI.BUTTON_H; ry2++) {
-          print(b.x0, UI.BUTTON_Y + ry2, b.text, col);
-        }
-      }
-
-      var tag = schemes[state.schemeIndex].name;
-      print(c, UI.BUTTON_Y, 'SCHEME:' + tag + '  ', COL_DIM);
-      print(c, UI.BUTTON_Y + 1, 'MODE:' + (state.view === 'menu' ? 'MENU ' : 'APPS '), COL_DIM);
-    },
-
-    onTouch: function (x, y) {
-      if (y < UI.BUTTON_Y || y >= UI.BUTTON_Y + UI.BUTTON_H) return false;
-
-      for (var i = 0; i < buttonBar.buttons.length; i++) {
-        var b = buttonBar.buttons[i];
-        if (x >= b.x0 && x < b.xf) {
-          for (var ry = 0; ry < UI.BUTTON_H; ry++) {
-            print(b.x0, UI.BUTTON_Y + ry, b.text, COL_WARN);
-          }
-          setTimeout(buttonBar.draw, 120);
-          b.on();
-          return true;
-        }
-      }
-      return false;
+    function push(text, fn) {
+      var len = text.length;
+      var x0 = x - len + 1;
+      var xf = x + 1;
+      buttonBar.buttons.push({ x0:x0, xf:xf, text:text, on:fn });
+      x = x0 - 1;
     }
-  };
+
+    push('[BOOT]', bootOnly);
+    push(labelBG(), cycleBackgroundMode);
+    push(labelL(), toggleLineGlitch);
+    push(labelW(), toggleWordGlitch);
+    push(labelFX(), toggleFX);
+    push('[SCM]', cycleScheme);
+    push(labelVIEW(), function () {
+      switchView(state.view === 'menu' ? 'apps' : 'menu');
+    });
+  },
+
+  draw: function () {
+    buttonBar.build();
+
+    // Clear BOTH rows from base (prevents ghost text)
+    background.restoreLine(UI.BUTTON_Y);
+    background.restoreLine(UI.BUTTON_Y + 1);
+
+    // Draw buttons ONLY on the first row (no duplicates)
+    for (var i = 0; i < buttonBar.buttons.length; i++) {
+      var b = buttonBar.buttons[i];
+      var col = COL_DIM;
+      if (b.text === '[FX*]' || b.text === '[W*]' || b.text === '[L*]') col = COL_MAIN;
+      print(b.x0, UI.BUTTON_Y, b.text, col);
+    }
+
+    // Left labels: scheme on row 1, mode on row 2
+    var tag = schemes[state.schemeIndex].name;
+    print(c, UI.BUTTON_Y, 'SCHEME:' + tag + '  ', COL_DIM);
+    print(c, UI.BUTTON_Y + 1, 'MODE:' + (state.view === 'menu' ? 'MENU ' : 'APPS '), COL_DIM);
+  },
+
+  onTouch: function (x, y) {
+    // 2-row tall hitbox, even though we only draw on row 1
+    if (y < UI.BUTTON_Y || y > UI.BUTTON_Y + 1) return false;
+
+    for (var i = 0; i < buttonBar.buttons.length; i++) {
+      var b = buttonBar.buttons[i];
+      if (x >= b.x0 && x < b.xf) {
+        // Flash ONLY on the drawn row (row 1)
+        print(b.x0, UI.BUTTON_Y, b.text, COL_WARN);
+        setTimeout(buttonBar.draw, 120);
+
+        b.on();
+        return true;
+      }
+    }
+    return false;
+  }
+};
 
   // ====================================================
   // BUTTON ACTIONS
@@ -482,11 +485,19 @@
     var mode = meta.mode || 'BOOT';
     var target = meta.target || '';
     var hint = meta.hint || '';
+    
+    for (var ry = 0; ry < UI.BUTTON_H; ry++) {
+    background.restoreLine(UI.BUTTON_Y + ry);
+    }
 
-    // Clear boot-only page region (restore from BASE!)
-    for (var y = UI.CONTENT_Y0; y <= UI.STATUS_Y; y++) background.restoreLine(y);
+ 
+    for (var y = UI.CONTENT_Y0; y <= UI.STATUS_Y; y++) {
+    background.restoreLine(y);
+    }
     background.restoreLine(UI.PAGER_Y);
     background.restoreLine(UI.STATUS_Y);
+    
+    
 
     // Choose boot
     var idx = state.boot.random
@@ -866,18 +877,18 @@
       for (var y = UI.CONTENT_Y0; y <= UI.CONTENT_Y1; y++) background.restoreLine(y);
 
       menu.items = [
-        { label:'MAIN MENU // OPERATOR CONSOLE', on:function(){} },
+       // { label:'MAIN MENU // OPERATOR CONSOLE', on:function(){} },
         { label:'[APPS]   Open app grid (9/page)', on:function(){ switchView('apps'); } },
         { label:'[BOOT]   Boot-only screen', on:function(){ bootOnly(); } },
         { label:'[CLEAR]  Clear hidden notifs (local)', on:function(){ state.dismissedNotifIds={}; statusFeed.updateItems(); statusFeed.render(); } },
-        { label:'TIP: Use [APPS] to switch pages. [BOOT] is animation only.', on:function(){} }
+      //  { label:'TIP: Use [APPS] to switch pages. [BOOT] is animation only.', on:function(){} }
       ];
 
       var y = UI.CONTENT_Y0;
-      print(1, y, menu.items[0].label, COL_MAIN);
+  //   print(1, y, menu.items[0].label, COL_MAIN);
       y += 2;
 
-      for (var i = 1; i < menu.items.length && y <= UI.CONTENT_Y1; i++) {
+      for (var i = 0; i < menu.items.length && y <= UI.CONTENT_Y1; i++) {
         print(1, y, menu.items[i].label, COL_DIM);
         menu.items[i].y = y;
         y += 2;
@@ -938,7 +949,7 @@
 
       apps.load();
 
-      print(1, UI.CONTENT_Y0, 'APPS GRID // 3x3 PAGED', COL_MAIN);
+   //   print(1, UI.CONTENT_Y0, 'APPS GRID // 3x3 PAGED', COL_MAIN);
 
       apps.y0 = UI.CONTENT_Y0 + 2;
       apps.cellW = Math.floor(w / apps.cols);
@@ -980,7 +991,7 @@
       var hy = Math.min(UI.CONTENT_Y1, apps.y0 + apps.rows * apps.cellH + 1);
       if (hy <= UI.CONTENT_Y1) {
         background.restoreLine(hy);
-        print(1, hy, '[MENU] switch back with top button', COL_DIM);
+       // print(1, hy, '[MENU] switch back with top button', COL_DIM);
       }
     },
 
@@ -1013,10 +1024,10 @@
 
       print(1, UI.PAGER_Y, left, COL_DIM);
 
-      var rx = Math.max(1, w - right.length - 1);
+      var rx = Math.max(10, w - right.length - 1);
       print(rx, UI.PAGER_Y, right, COL_DIM);
 
-      var label = 'PAGE ' + (apps.page + 1) + '/' + apps.totalPages + '  (9/PAGE)';
+      var label = 'PAGE ' + (apps.page + 1) + '/' + apps.totalPages;
       var lx = Math.max(6, Math.floor((w - label.length) / 2));
       print(lx, UI.PAGER_Y, label, COL_DIM);
 
