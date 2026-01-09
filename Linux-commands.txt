@@ -1,0 +1,9 @@
+Linux commands from the video:
+Btop - https://github.com/aristocratos/btop
+CMatrix - https://github.com/abishekvashok/cmatrix
+Neofetch - https://github.com/dylanaraps/neofetch
+Speedometer - https://excess.org/speedometer
+Pipes.sh - https://github.com/pipeseroni/pipes.sh
+Asciiquarium - https://github.com/cmatsuoka/asciiqua...
+Sl - https://github.com/mtoyoda/sl
+Figlet - https://github.com/cmatsuoka/figlet
