@@ -1,0 +1,1128 @@
+/*
+  ap37 // RETRO HACKER TERMINAL (ALIEN-ISH) CLIENT v7
+  FIX: Proper clearing (separate base background vs drawn UI)
+  RULE: Only ONE page visible:
+        - MAIN MENU  OR  APP GRID
+  TRANSITIONS:
+        - Switching pages plays a randomized world-building boot
+        - [BOOT] plays boot-only (no view change)
+*/
+
+(function script () {
+  'use strict';
+
+  // ====================================================
+  // SCHEMES
+  // ====================================================
+  var schemes = [
+    { name: 'PHOS', BG:'#001b12', BG2:'#002a1c', DIM:'#00a86b', MAIN:'#00ff88', WARN:'#ff3333', GORE:'#66ffcc' },
+    { name: 'AMBR', BG:'#1a1200', BG2:'#2a1d00', DIM:'#d6a400', MAIN:'#ffcc33', WARN:'#ff3333', GORE:'#ffe39a' },
+    { name: 'ICE ', BG:'#00131a', BG2:'#001f2a', DIM:'#29c7ff', MAIN:'#7ee8ff', WARN:'#ff3355', GORE:'#b6fff5' },
+    { name: 'TOX ', BG:'#071a00', BG2:'#0b2a00', DIM:'#55ff44', MAIN:'#b6ff2e', WARN:'#ff3333', GORE:'#ddff99' }
+  ];
+
+  var COL_BG, COL_BG2, COL_DIM, COL_MAIN, COL_WARN, COL_GORE;
+
+  // ====================================================
+  // SCREEN + UI LAYOUT
+  // ====================================================
+  // ====================================================
+// SCREEN + UI LAYOUT (BOTTOM BARS ARE 2 ROWS TALL)
+// ====================================================
+var w, h, c;
+
+var UI = {
+  BUTTON_Y: 1,
+  BUTTON_H: 2,      // top bar = 2 rows
+
+  PAGER_H: 2,       // NEW: pager = 2 rows (big paddles)
+  STATUS_H: 2,      // NEW: status = 2 rows (bigger hit area)
+
+  PAGER_Y0: null,   // computed
+  STATUS_Y0: null,  // computed
+  FOOTER_Y: null,   // computed
+
+  CONTENT_Y0: null,
+  CONTENT_Y1: null
+};
+
+function computeLayout() {
+  w = ap37.getScreenWidth();
+  h = ap37.getScreenHeight();
+  c = ap37.getCornersWidth();
+
+  UI.FOOTER_Y  = h - 1;
+
+  // status sits above footer, 2 rows
+  UI.STATUS_Y0 = UI.FOOTER_Y - UI.STATUS_H;
+
+  // pager sits above status, 2 rows
+  UI.PAGER_Y0  = UI.STATUS_Y0 - UI.PAGER_H;
+
+  // content starts after top button bar
+  UI.CONTENT_Y0 = UI.BUTTON_Y + UI.BUTTON_H;
+
+  // content ends right above pager
+  UI.CONTENT_Y1 = UI.PAGER_Y0 - 1;
+}
+  // ====================================================
+  // STATE
+  // ====================================================
+  var state = {
+    view: 'apps',          // 'menu' | 'apps'
+    schemeIndex: 2,        // ICE
+    bgMode: 2,             // 0 FLAT, 1 GRAIN, 2 GLIT
+    fx: true,
+    wordGlitch: false,
+    lineGlitch: false,
+    inBoot: false,
+    timers: { time:null, battery:null, fx:null, status:null },
+    dismissedNotifIds: {},
+    boot: { index: 0, random: true } // random boot variants
+  };
+
+  // App blacklist placeholders
+  var hiddenApps = ['ExampleApp1', 'ExampleApp2'];
+
+  // ====================================================
+  // INIT
+  // ====================================================
+  function init () {
+    ap37.setTextSize(16);
+    computeLayout();
+
+    w = ap37.getScreenWidth();
+    h = ap37.getScreenHeight();
+    c = ap37.getCornersWidth();
+
+    UI.FOOTER_Y = h - 1;
+    UI.STATUS_Y = h - 2;
+    UI.PAGER_Y  = h - 3;
+    UI.CONTENT_Y0 = UI.BUTTON_Y + UI.BUTTON_H;
+    UI.CONTENT_Y1 = UI.PAGER_Y - 1;
+
+// (optional keep this if you still use TOP_RESERVED elsewhere)
+UI.TOP_RESERVED = UI.CONTENT_Y0;
+
+
+    applyScheme(state.schemeIndex);
+
+    clearAllIntervals();
+    background.init(); // builds base + current
+
+    // cold boot on startup
+    state.inBoot = true;
+    bootTransition(function () {
+      state.inBoot = false;
+      renderAll();
+      hookListeners();
+      startIntervals();
+    }, { mode:'BOOT', hint:'[COLD START]' });
+  }
+
+  // ====================================================
+  // RENDER PIPELINE
+  // ====================================================
+  function renderAll () {
+    if (state.inBoot) return;
+
+    // HARD clear: restore from BASE everywhere (base -> current + print)
+    for (var y = 0; y < h; y++) background.restoreLine(y);
+
+    // header/footer (always)
+    print(c, 0, 'ap37-7e5a32b1', COL_DIM);
+    time.update();
+    battery.update();
+    print(w - c - 11, UI.FOOTER_Y, 'END OF LINE', COL_DIM);
+
+    // top bar
+    buttonBar.draw();
+
+    // refresh data
+    notifications.update();
+    statusFeed.updateItems();
+
+    // STRICT view rendering:
+    if (state.view === 'menu') {
+      // ensure pager row looks empty in menu mode
+      background.restoreLine(UI.PAGER_Y);
+      menu.render();
+    } else {
+      apps.render();
+      pager.render();
+    }
+
+    // status row always last
+    statusFeed.render();
+  }
+
+  // ====================================================
+  // VIEW SWITCHING WITH BOOT TRANSITION
+  // ====================================================
+  function switchView (target) {
+    if (state.inBoot) return;
+    if (target === state.view) return;
+
+    state.inBoot = true;
+    var label = (target === 'apps') ? 'APPS' : 'MENU';
+
+    bootTransition(function () {
+      state.view = target;
+      state.inBoot = false;
+      renderAll();
+    }, { mode:'SWITCH', target: label, hint:':: OPERATOR MODE' });
+  }
+
+  function bootOnly () {
+    if (state.inBoot) return;
+    state.inBoot = true;
+
+    bootTransition(function () {
+      state.inBoot = false;
+      renderAll();
+    }, { mode:'BOOT', hint:'[BOOT ONLY]' });
+  }
+
+  // ====================================================
+  // TIMERS
+  // ====================================================
+  function clearAllIntervals () {
+    try { if (state.timers.time) clearInterval(state.timers.time); } catch(e){}
+    try { if (state.timers.battery) clearInterval(state.timers.battery); } catch(e){}
+    try { if (state.timers.fx) clearInterval(state.timers.fx); } catch(e){}
+    try { if (state.timers.status) clearInterval(state.timers.status); } catch(e){}
+    state.timers = { time:null, battery:null, fx:null, status:null };
+  }
+
+  function startIntervals () {
+    state.timers.time = setInterval(time.update, 60000);
+    state.timers.battery = setInterval(battery.update, 60000);
+    state.timers.fx = setInterval(TerminalFX.update, 80);
+    state.timers.status = setInterval(statusFeed.tick, 4000);
+  }
+
+  // ====================================================
+  // INPUT HOOKS
+  // ====================================================
+  function hookListeners () {
+  ap37.setOnTouchListener(function (x, y) {
+  if (state.inBoot) return;
+
+  // TOP BAR (2 rows)
+  if (y >= UI.BUTTON_Y && y < (UI.BUTTON_Y + UI.BUTTON_H)) {
+    buttonBar.onTouch(x, y);
+    return;
+  }
+
+  // PAGER (2 rows) - only in apps view
+  if (state.view === 'apps' && y >= UI.PAGER_Y0 && y < (UI.PAGER_Y0 + UI.PAGER_H)) {
+    pager.onTouch(x, y);
+    return;
+  }
+
+  // STATUS (2 rows)
+  if (y >= UI.STATUS_Y0 && y < (UI.STATUS_Y0 + UI.STATUS_H)) {
+    statusFeed.onTouch(x, y);
+    return;
+  }
+
+  // CONTENT
+  if (state.view === 'menu') menu.onTouch(x, y);
+  else apps.onTouch(x, y);
+});
+
+    ap37.setOnNotificationsListener(function () {
+      notifications.update();
+      statusFeed.updateItems();
+      statusFeed.render();
+    });
+
+    ap37.setOnAppsListener(function () {
+      renderAll();
+    });
+  }
+
+  // ====================================================
+// BUTTON BAR (2 rows tall hitbox, 1 row visual)
+// ====================================================
+var buttonBar = {
+  buttons: [],
+
+  build: function () {
+    function labelFX()  { return state.fx ? '[FX*]' : '[FX ]'; }
+    function labelW()   { return state.wordGlitch ? '[W*]' : '[W ]'; }
+    function labelL()   { return state.lineGlitch ? '[L*]' : '[L ]'; }
+    function labelBG()  { return '[BG' + (state.bgMode === 0 ? 'F' : state.bgMode === 1 ? 'G' : 'X') + ']'; }
+    function labelVIEW(){ return (state.view === 'menu') ? '[APPS]' : '[MENU]'; }
+
+    buttonBar.buttons = [];
+    var x = w - 1;
+
+    function push(text, fn) {
+      var len = text.length;
+      var x0 = x - len + 1;
+      var xf = x + 1;
+      buttonBar.buttons.push({ x0:x0, xf:xf, text:text, on:fn });
+      x = x0 - 1;
+    }
+
+    push('[BOOT]', bootOnly);
+    push(labelBG(), cycleBackgroundMode);
+    push(labelL(), toggleLineGlitch);
+    push(labelW(), toggleWordGlitch);
+    push(labelFX(), toggleFX);
+    push('[SCM]', cycleScheme);
+    push(labelVIEW(), function () {
+      switchView(state.view === 'menu' ? 'apps' : 'menu');
+    });
+  },
+
+  draw: function () {
+    buttonBar.build();
+
+    // Clear BOTH rows from base (prevents ghost text)
+    background.restoreLine(UI.BUTTON_Y);
+    background.restoreLine(UI.BUTTON_Y + 1);
+
+    // Draw buttons ONLY on the first row (no duplicates)
+    for (var i = 0; i < buttonBar.buttons.length; i++) {
+      var b = buttonBar.buttons[i];
+      var col = COL_DIM;
+      if (b.text === '[FX*]' || b.text === '[W*]' || b.text === '[L*]') col = COL_MAIN;
+      print(b.x0, UI.BUTTON_Y, b.text, col);
+    }
+
+    // Left labels: scheme on row 1, mode on row 2
+    var tag = schemes[state.schemeIndex].name;
+    print(c, UI.BUTTON_Y, 'SCHEME:' + tag + '  ', COL_DIM);
+    print(c, UI.BUTTON_Y + 1, 'MODE:' + (state.view === 'menu' ? 'MENU ' : 'APPS '), COL_DIM);
+  },
+
+  onTouch: function (x, y) {
+    // 2-row tall hitbox, even though we only draw on row 1
+    if (y < UI.BUTTON_Y || y > UI.BUTTON_Y + 1) return false;
+
+    for (var i = 0; i < buttonBar.buttons.length; i++) {
+      var b = buttonBar.buttons[i];
+      if (x >= b.x0 && x < b.xf) {
+        // Flash ONLY on the drawn row (row 1)
+        print(b.x0, UI.BUTTON_Y, b.text, COL_WARN);
+        setTimeout(buttonBar.draw, 120);
+
+        b.on();
+        return true;
+      }
+    }
+    return false;
+  }
+};
+
+  // ====================================================
+  // BUTTON ACTIONS
+  // ====================================================
+  function cycleScheme () {
+    state.schemeIndex = (state.schemeIndex + 1) % schemes.length;
+    applyScheme(state.schemeIndex);
+    background.init();  // rebuild base + current
+    renderAll();
+  }
+
+  function toggleFX () { state.fx = !state.fx; buttonBar.draw(); }
+
+  function toggleWordGlitch () {
+    state.wordGlitch = !state.wordGlitch;
+    wordGlitch.active = state.wordGlitch;
+    if (!wordGlitch.active && wordGlitch.intervalId) clearInterval(wordGlitch.intervalId);
+    if (wordGlitch.active) wordGlitch.intervalId = setInterval(wordGlitch.update, 90);
+    buttonBar.draw();
+  }
+
+  function toggleLineGlitch () {
+    state.lineGlitch = !state.lineGlitch;
+    lineGlitch.active = state.lineGlitch;
+    if (!lineGlitch.active && lineGlitch.intervalId) clearInterval(lineGlitch.intervalId);
+    if (lineGlitch.active) lineGlitch.intervalId = setInterval(lineGlitch.update, 160);
+    buttonBar.draw();
+  }
+
+  function cycleBackgroundMode () {
+    state.bgMode = (state.bgMode + 1) % 3;
+    background.init(); // rebuild base + current (this is why BG “fixes” things)
+    renderAll();
+  }
+
+  function applyScheme (idx) {
+    var s = schemes[idx];
+    COL_BG = s.BG; COL_BG2 = s.BG2; COL_DIM = s.DIM;
+    COL_MAIN = s.MAIN; COL_WARN = s.WARN; COL_GORE = s.GORE;
+  }
+
+  // ====================================================
+  // BACKGROUND (FIXED: base vs current)
+  // ====================================================
+  var background = {
+    // base (immutable bed)
+    baseBuffer: [],
+    baseColors: [],
+    // current (bed + UI)
+    buffer: [],
+    bufferColors: [],
+
+    init: function () {
+      background.baseBuffer = [];
+      background.baseColors = [];
+      background.buffer = [];
+      background.bufferColors = [];
+
+      for (var y = 0; y < h; y++) {
+        var row = '';
+        var cols = [];
+
+        for (var x = 0; x < w; x++) {
+          var ch, col;
+
+          if (state.bgMode === 0) {
+            ch = '·';
+            col = (y % 2 === 1) ? COL_BG : COL_BG2;
+          } else if (state.bgMode === 1) {
+            var r = Math.random();
+            ch = (r < 0.70) ? '·' : (r < 0.90) ? '•' : '░';
+            col = (y % 2 === 1) ? COL_BG : COL_BG2;
+          } else {
+            var g = Math.random();
+            ch = (g < 0.65) ? '·' : (g < 0.88) ? '•' : (g < 0.98) ? '░' : '✶';
+            col = (y % 2 === 1) ? COL_BG : COL_BG2;
+            if (ch === '✶') col = COL_GORE;
+          }
+
+          row += ch;
+          cols.push(col);
+        }
+
+        background.baseBuffer.push(row);
+        background.baseColors.push(cols);
+
+        // current starts as base
+        background.buffer.push(row);
+        background.bufferColors.push(cols.slice());
+      }
+
+      // print current
+      for (var yy = 0; yy < h; yy++) {
+        ap37.printMultipleColors(0, yy, background.buffer[yy], background.bufferColors[yy]);
+      }
+    },
+
+    // restore from BASE -> CURRENT (and print)
+    restoreLine: function (y) {
+      if (y < 0 || y >= h) return;
+      background.buffer[y] = background.baseBuffer[y];
+      background.bufferColors[y] = background.baseColors[y].slice();
+      ap37.printMultipleColors(0, y, background.buffer[y], background.bufferColors[y]);
+    },
+
+    // restore segment from BASE -> CURRENT (and print)
+    restoreSegment: function (x0, y, len) {
+      if (y < 0 || y >= h) return;
+      x0 = Math.max(0, Math.min(w, x0));
+      len = Math.max(0, Math.min(w - x0, len));
+
+      var baseText = background.baseBuffer[y].substr(x0, len);
+      var baseCols = background.baseColors[y].slice(x0, x0 + len);
+
+      // apply to current buffers
+      background.buffer[y] =
+        background.buffer[y].substr(0, x0) + baseText +
+        background.buffer[y].substr(x0 + len);
+
+      for (var i = 0; i < len; i++) {
+        background.bufferColors[y][x0 + i] = baseCols[i];
+      }
+
+      ap37.printMultipleColors(x0, y, baseText, baseCols);
+    },
+
+    printPattern: function (x0, xf, y) {
+      background.restoreSegment(x0, y, Math.max(0, xf - x0));
+    },
+
+    // draw into CURRENT
+    saveBuffer: function (x, y, text, color) {
+      if (y < 0 || y >= h) return;
+      if (x < 0 || x >= w) return;
+
+      var maxLen = w - x;
+      if (text.length > maxLen) text = text.substring(0, maxLen);
+
+      background.buffer[y] =
+        background.buffer[y].substr(0, x) + text +
+        background.buffer[y].substr(x + text.length);
+
+      for (var i = 0; i < text.length; i++) {
+        background.bufferColors[y][x + i] = color;
+      }
+    }
+  };
+
+  // ====================================================
+  // FX (skip protected rows)
+  // ====================================================
+  var TerminalFX = {
+    update: function () {
+      if (!state.fx || state.inBoot) return;
+
+      // flicker a content line
+      if (Math.random() < 0.10) {
+        var y = UI.CONTENT_Y0 + Math.floor(Math.random() * Math.max(1, (UI.CONTENT_Y1 - UI.CONTENT_Y0)));
+        if (y === UI.PAGER_Y || y === UI.STATUS_Y || y === UI.FOOTER_Y) return;
+
+        var cols = background.bufferColors[y].slice();
+        for (var x = 0; x < w; x++) if (y % 2 === 1) cols[x] = COL_BG;
+
+        ap37.printMultipleColors(0, y, background.buffer[y], cols);
+        setTimeout((function (yy) { return function () { ap37.printMultipleColors(0, yy, background.buffer[yy], background.bufferColors[yy]); }; })(y), 60);
+      }
+
+      // spark specks
+      var sparkChance = (state.bgMode === 2) ? 0.14 : 0.08;
+      if (Math.random() < sparkChance) {
+        var sx = Math.floor(Math.random() * w);
+        var sy = UI.CONTENT_Y0 + Math.floor(Math.random() * Math.max(1, (UI.CONTENT_Y1 - UI.CONTENT_Y0)));
+        if (sy === UI.PAGER_Y || sy === UI.STATUS_Y || sy === UI.FOOTER_Y) return;
+
+        ap37.print(sx, sy, (Math.random() < 0.5 ? '·' : '•'), (Math.random() < 0.5 ? COL_GORE : COL_DIM));
+        setTimeout((function (yy) { return function () { ap37.printMultipleColors(0, yy, background.buffer[yy], background.bufferColors[yy]); }; })(sy), 50);
+      }
+    }
+  };
+
+  // ====================================================
+  // BOOT VARIANTS (5 world-building boots)
+  // ====================================================
+  var boots = [
+    boot_WY_HANDSHAKE(),
+    boot_NOSTROMO_RECORDER(),
+    boot_EVA_SUIT_LINK(),
+    boot_SECTOR_MAP_LOCKDOWN(),
+    boot_XENO_BIOLAB_CONTAM()
+  ];
+
+  function bootTransition(done, meta) {
+    meta = meta || {};
+    var mode = meta.mode || 'BOOT';
+    var target = meta.target || '';
+    var hint = meta.hint || '';
+    
+    for (var ry = 0; ry < UI.BUTTON_H; ry++) {
+    background.restoreLine(UI.BUTTON_Y + ry);
+    }
+
+ 
+    for (var y = UI.CONTENT_Y0; y <= UI.STATUS_Y; y++) {
+    background.restoreLine(y);
+    }
+    background.restoreLine(UI.PAGER_Y);
+    background.restoreLine(UI.STATUS_Y);
+    
+    
+
+    // Choose boot
+    var idx = state.boot.random
+      ? Math.floor(Math.random() * boots.length)
+      : (state.boot.index % boots.length);
+
+    var boot = boots[idx];
+
+    // Print boot header inside content
+    background.restoreLine(UI.CONTENT_Y0);
+    var title = boot.title || 'BOOT';
+    var head = title + (mode === 'SWITCH' ? ' :: SWITCH -> ' + target : '');
+    print(1, UI.CONTENT_Y0, head, COL_MAIN);
+    if (hint) print(Math.max(1, w - hint.length - 1), UI.CONTENT_Y0, hint, COL_DIM);
+
+    boot.run(function () {
+      done();
+    }, meta);
+  }
+
+  function bootPrintLines(lines, opts, done) {
+    opts = opts || {};
+    var warnRule = opts.warnRule || function () { return false; };
+    var endDelay = (opts.endDelay != null) ? opts.endDelay : 140;
+
+    var startY = UI.CONTENT_Y0 + 2;
+    var barY = UI.CONTENT_Y0 + 1;
+    var i = 0;
+
+    function bar(pct, width) {
+      var filled = Math.max(0, Math.min(width, Math.floor(width * pct)));
+      return '[' + new Array(filled + 1).join('█') + new Array(width - filled + 1).join(' ') + ']';
+    }
+
+    // progress bar row
+    background.restoreLine(barY);
+    var width = Math.min(18, Math.max(10, Math.floor(w / 6)));
+    print(1, barY, 'PROGRESS ' + bar(0.0, width), COL_DIM);
+
+    // optional map splash
+    if (opts.mapSplash) {
+      var my = startY;
+      if (my + 2 <= UI.CONTENT_Y1) {
+        background.restoreLine(my);
+        print(1, my, 'MAP: [▓▓░░▓░▓▓░░▓░░▓▓]', COL_DIM);
+        background.restoreLine(my + 1);
+        print(1, my + 1, 'NODE: o--o--o==o--x--o', COL_DIM);
+        startY += 2;
+      }
+    }
+
+    // optional gore preline
+    if (opts.gore) {
+      var gy = startY;
+      if (gy <= UI.CONTENT_Y1) {
+        background.restoreLine(gy);
+        print(1, gy, '░░░ BIO-FLUID RESIDUE DETECTED ░░░', COL_WARN);
+        startY += 1;
+      }
+    }
+
+    var interval = setInterval(function () {
+      // update progress
+      var pct = i / Math.max(1, lines.length);
+      background.restoreLine(barY);
+      print(1, barY, 'PROGRESS ' + bar(pct, width), COL_DIM);
+
+      if (i >= lines.length) {
+        clearInterval(interval);
+        background.restoreLine(barY);
+        print(1, barY, 'PROGRESS ' + bar(1.0, width), COL_DIM);
+        setTimeout(done, endDelay);
+        return;
+      }
+
+      var yy = startY + i;
+      if (yy <= UI.CONTENT_Y1) {
+        background.restoreLine(yy);
+        var t = lines[i];
+        var col = warnRule(t) ? COL_WARN : COL_MAIN;
+        print(1, yy, t, col);
+
+        if (opts.glitchy && Math.random() < 0.35) {
+          var x = Math.floor(Math.random() * Math.max(1, w - 8));
+          ap37.print(x, yy, '░▒▓'.charAt(Math.floor(Math.random() * 3)), COL_DIM);
+        }
+      }
+
+      i++;
+    }, 70);
+  }
+
+  function boot_WY_HANDSHAKE() {
+    return {
+      title: 'WEYLAND-YUTANI // SYS/7',
+      run: function (done, meta) {
+        var node = Math.random().toString(16).substr(2, 4).toUpperCase();
+        var mem  = 512 + Math.floor(Math.random() * 1536);
+        var noise = 20 + Math.floor(Math.random() * 80);
+        var busOk = Math.random() < 0.85;
+
+        var lines = [
+          'NODE..............' + node,
+          'HANDSHAKE.........' + (Math.random() < 0.92 ? 'OK' : 'RETRY'),
+          'AUTH..............OK',
+          'BUS...............' + (busOk ? 'SYNC' : 'DESYNC'),
+          'MEMCHECK..........' + mem + 'K OK',
+          'NOISE FLOOR........' + noise + 'dB',
+          'LOAD MODS..........CORE/UI/FX/STATUS',
+          (meta && meta.mode === 'SWITCH') ? ('SWITCHING.........' + (meta.target || 'MODE')) : 'DIAGNOSTICS........OK',
+          'READY.'
+        ];
+
+        bootPrintLines(lines, {
+          warnRule: function (t) {
+            return t.indexOf('DESYNC') >= 0 || (t.indexOf('NOISE') >= 0 && noise > 70) || t.indexOf('RETRY') >= 0;
+          },
+          endDelay: 140
+        }, done);
+      }
+    };
+  }
+
+  function boot_NOSTROMO_RECORDER() {
+    return {
+      title: 'NOSTROMO // FLIGHT RECORDER',
+      run: function (done, meta) {
+        var drift = (Math.random() * 2.5).toFixed(2);
+        var cryo  = (Math.random() < 0.6) ? 'STABLE' : 'UNSTABLE';
+        var msgId = Math.random().toString(16).substr(2, 8).toUpperCase();
+
+        var lines = [
+          'RECORDER ID........' + msgId,
+          'LAST EVENT.........' + (Math.random() < 0.5 ? 'COURSE CORRECTION' : 'DISTRESS RECEPTION'),
+          'NAV DRIFT..........' + drift + '°',
+          'CRYO BAY...........' + cryo,
+          'AUDIO BUFFER.......' + (Math.random() < 0.7 ? 'INTACT' : 'CORRUPT'),
+          'TRANSCRIPT........."DO NOT WAKE THEM"',
+          'SIGNATURE..........UNKNOWN',
+          (meta && meta.mode === 'SWITCH') ? ('MODE CHANGE........' + (meta.target || 'MODE')) : 'REWIND.............OK',
+          'PLAYBACK READY.'
+        ];
+
+        bootPrintLines(lines, {
+          warnRule: function (t) {
+            return t.indexOf('UNSTABLE') >= 0 || t.indexOf('CORRUPT') >= 0 || t.indexOf('UNKNOWN') >= 0;
+          },
+          endDelay: 220,
+          glitchy: true
+        }, done);
+      }
+    };
+  }
+
+  function boot_EVA_SUIT_LINK() {
+    return {
+      title: 'EVA SUIT // UMBILICAL LINK',
+      run: function (done, meta) {
+        var o2 = 78 + Math.floor(Math.random() * 22);
+        var seal = (Math.random() < 0.88) ? 'SEALED' : 'LEAK';
+        var temp = (-40 + Math.floor(Math.random() * 90));
+        var comm = (Math.random() < 0.75) ? 'CLEAR' : 'HISS';
+
+        var lines = [
+          'SUIT...............DETECTED',
+          'SEAL STATUS........' + seal,
+          'O2 RESERVE.........' + o2 + '%',
+          'THERMAL............' + temp + 'C',
+          'COMMS..............' + comm,
+          'HUD PIPE...........' + (Math.random() < 0.9 ? 'LOCKED' : 'DROP'),
+          'GLASS..............' + (Math.random() < 0.85 ? 'CLEAR' : 'FOG'),
+          (meta && meta.mode === 'SWITCH') ? ('TASK LOAD..........' + (meta.target || 'MODE')) : 'CALIBRATION........OK',
+          'EVA READY.'
+        ];
+
+        bootPrintLines(lines, {
+          warnRule: function (t) {
+            return t.indexOf('LEAK') >= 0 || t.indexOf('DROP') >= 0 || t.indexOf('HISS') >= 0 || t.indexOf('FOG') >= 0;
+          },
+          endDelay: 120
+        }, done);
+      }
+    };
+  }
+
+  function boot_SECTOR_MAP_LOCKDOWN() {
+    return {
+      title: 'SECTOR NET // LOCKDOWN MAP',
+      run: function (done, meta) {
+        var sector = 'LV-' + (100 + Math.floor(Math.random() * 900));
+        var gates = 2 + Math.floor(Math.random() * 6);
+        var threat = (Math.random() < 0.6) ? 'LOW' : (Math.random() < 0.5 ? 'MED' : 'HIGH');
+
+        var lines = [
+          'SECTOR.............' + sector,
+          'GATE NODES.........' + gates,
+          'ROUTE TABLE........' + (Math.random() < 0.8 ? 'VALID' : 'POISON'),
+          'LOCKDOWN...........' + (threat === 'HIGH' ? 'ACTIVE' : 'STANDBY'),
+          'SIGNAL ORIGIN......' + (Math.random() < 0.5 ? 'DEEP RANGE' : 'LOCAL'),
+          'AUTH KEYS..........ROTATING',
+          'TRACE..............' + (Math.random() < 0.7 ? 'OFF' : 'ON'),
+          (meta && meta.mode === 'SWITCH') ? ('ENTERING...........' + (meta.target || 'MODE')) : 'MAP CACHE...........WARM',
+          'LINK READY.'
+        ];
+
+        bootPrintLines(lines, {
+          warnRule: function (t) {
+            return t.indexOf('POISON') >= 0 || t.indexOf('ACTIVE') >= 0 || t.indexOf('TRACE..............ON') >= 0;
+          },
+          endDelay: 160,
+          mapSplash: true
+        }, done);
+      }
+    };
+  }
+
+  function boot_XENO_BIOLAB_CONTAM() {
+    return {
+      title: 'BIO-LAB // CONTAINMENT',
+      run: function (done, meta) {
+        var sample = 'X-' + Math.random().toString(16).substr(2, 3).toUpperCase();
+        var ph = (2 + Math.random() * 3).toFixed(2);
+        var breach = Math.random() < 0.25;
+
+        var lines = [
+          'SAMPLE.............' + sample,
+          'PH..................' + ph,
+          'SPORULATION.........' + (Math.random() < 0.6 ? 'RISING' : 'STABLE'),
+          'CONTAINMENT.........' + (breach ? 'BREACH' : 'HOLD'),
+          'STERILIZE...........' + (breach ? 'FAILED' : 'OK'),
+          'VISCOSITY...........' + (Math.random() < 0.5 ? 'HIGH' : 'UNKNOWN'),
+          'AIR FILTER..........' + (Math.random() < 0.7 ? 'CHOKED' : 'CLEAR'),
+          (meta && meta.mode === 'SWITCH') ? ('TRANSFER...........' + (meta.target || 'MODE')) : 'QUARANTINE..........ARMED',
+          'LAB READY.'
+        ];
+
+        bootPrintLines(lines, {
+          warnRule: function (t) {
+            return t.indexOf('BREACH') >= 0 || t.indexOf('FAILED') >= 0 || t.indexOf('UNKNOWN') >= 0 || t.indexOf('CHOKED') >= 0;
+          },
+          endDelay: 220,
+          gore: true
+        }, done);
+      }
+    };
+  }
+
+  // ====================================================
+  // HEADER MODULES
+  // ====================================================
+  var time = {
+    update: function () {
+      var d = ap37.getDate();
+      var t = d.year +
+        leftPad(d.month, 2, '0') + leftPad(d.day, 2, '0') + ' ' +
+        leftPad(d.hour, 2, '0') + leftPad(d.minute, 2, '0');
+      print(w - c - 13, 0, t, COL_DIM);
+    }
+  };
+
+  var battery = {
+    update: function () {
+      print(w - c - 17, 0, leftPad(ap37.getBatteryLevel(), 3, ' '), COL_DIM);
+    }
+  };
+
+  // ====================================================
+  // NOTIFICATIONS (DATA ONLY)
+  // ====================================================
+  var notifications = {
+    list: [],
+    active: false,
+    update: function () {
+      notifications.active = ap37.notificationsActive();
+      if (!notifications.active) { notifications.list = []; return; }
+      notifications.list = ap37.getNotifications() || [];
+    }
+  };
+
+  // ====================================================
+  // STATUS FEED
+  // ====================================================
+  var statusFeed = {
+    index: 0,
+    items: [],
+
+    updateItems: function () {
+      statusFeed.items = [];
+
+      if (notifications.active && notifications.list.length) {
+        for (var i = 0; i < notifications.list.length; i++) {
+          var n = notifications.list[i];
+          if (n && n.id && state.dismissedNotifIds[n.id]) continue;
+          if (n && n.name) statusFeed.items.push({ type:'notif', text:'NOTIFY: ' + n.name, notif:n });
+        }
+      }
+
+      statusFeed.items.push({ type:'sys', text:'SYS: NOMINAL · BUS: SYNC · UPLINK: STANDBY' });
+      statusFeed.items.push({ type:'sys', text:'CACHE: WARM · AUTH: OK · WATCHDOG: ARMED' });
+
+      if (statusFeed.index >= statusFeed.items.length) statusFeed.index = 0;
+    },
+
+    current: function () {
+      if (!statusFeed.items.length) return null;
+      return statusFeed.items[stateFeedSafeIndex()];
+    },
+
+    render: function () {
+      background.restoreLine(UI.STATUS_Y);
+
+      var item = statusFeed.current();
+      if (!item) { print(1, UI.STATUS_Y, 'NO ACTIVE SIGNALS', COL_DIM); return; }
+
+      var action = (item.type === 'notif') ? '[OPEN][CLR]' : '[NEXT]';
+      var ax = Math.max(1, w - action.length - 1);
+
+      var maxMsg = Math.max(1, ax - 2);
+      var msg = item.text;
+      if (msg.length > maxMsg) msg = msg.substring(0, Math.max(1, maxMsg - 3)) + '...';
+
+      print(1, UI.STATUS_Y, msg, (item.type === 'notif') ? COL_MAIN : COL_DIM);
+      print(ax, UI.STATUS_Y, action, COL_DIM);
+    },
+
+    tick: function () {
+      if (state.inBoot) return;
+      if (!statusFeed.items.length) statusFeed.updateItems();
+      statusFeed.index = (statusFeed.index + 1) % Math.max(1, statusFeed.items.length);
+      statusFeed.render();
+    },
+
+    onTouch: function (x, y) {
+      var item = statusFeed.current();
+      if (!item) return;
+
+      var action = (item.type === 'notif') ? '[OPEN][CLR]' : '[NEXT]';
+      var ax = Math.max(1, w - action.length - 1);
+
+      if (x >= ax) {
+        if (item.type === 'notif') {
+          if (x < ax + 6) {
+            background.restoreLine(UI.STATUS_Y);
+            print(1, UI.STATUS_Y, 'OPENING: ' + (item.notif.name || '...'), COL_WARN);
+            ap37.openNotification(item.notif.id);
+            setTimeout(function () {
+              notifications.update();
+              statusFeed.updateItems();
+              statusFeed.render();
+            }, 800);
+          } else {
+            if (item.notif && item.notif.id) state.dismissedNotifIds[item.notif.id] = true;
+            statusFeed.updateItems();
+            statusFeed.render();
+          }
+        } else {
+          statusFeed.tick();
+        }
+      } else {
+        statusFeed.tick();
+      }
+    }
+  };
+
+  function stateFeedSafeIndex() {
+    if (!statusFeed.items.length) return 0;
+    return statusFeed.index % statusFeed.items.length;
+  }
+
+  // ====================================================
+  // MENU VIEW
+  // ====================================================
+  var menu = {
+    items: [],
+    render: function () {
+      // clear content area from BASE first
+      for (var y = UI.CONTENT_Y0; y <= UI.CONTENT_Y1; y++) background.restoreLine(y);
+
+      menu.items = [
+       // { label:'MAIN MENU // OPERATOR CONSOLE', on:function(){} },
+        { label:'[APPS]   Open app grid (9/page)', on:function(){ switchView('apps'); } },
+        { label:'[BOOT]   Boot-only screen', on:function(){ bootOnly(); } },
+        { label:'[CLEAR]  Clear hidden notifs (local)', on:function(){ state.dismissedNotifIds={}; statusFeed.updateItems(); statusFeed.render(); } },
+      //  { label:'TIP: Use [APPS] to switch pages. [BOOT] is animation only.', on:function(){} }
+      ];
+
+      var y = UI.CONTENT_Y0;
+  //   print(1, y, menu.items[0].label, COL_MAIN);
+      y += 2;
+
+      for (var i = 0; i < menu.items.length && y <= UI.CONTENT_Y1; i++) {
+        print(1, y, menu.items[i].label, COL_DIM);
+        menu.items[i].y = y;
+        y += 2;
+      }
+    },
+
+    onTouch: function (x, y) {
+      for (var i = 1; i < menu.items.length; i++) {
+        if (menu.items[i].y === y) {
+          flashLine(y, menu.items[i].label);
+          menu.items[i].on();
+          return;
+        }
+      }
+    }
+  };
+
+  function flashLine (y, text) {
+    background.restoreLine(y);
+    print(1, y, text, COL_WARN);
+    setTimeout(function () { renderAll(); }, 110);
+  }
+
+  // ====================================================
+  // APPS VIEW (3x3 = 9/page)
+  // ====================================================
+  var apps = {
+    list: [],
+    page: 0,
+    perPage: 9,
+    cols: 3,
+    rows: 3,
+    cellW: 0,
+    cellH: 2,
+    y0: null,
+    totalPages: 1,
+
+    load: function () {
+      var all = ap37.getApps() || [];
+      all = all.filter(function (app) {
+        if (!app || !app.name) return false;
+        return hiddenApps.indexOf(app.name) === -1;
+      });
+      all.sort(function (a, b) {
+        var an = (a.name || '').toLowerCase();
+        var bn = (b.name || '').toLowerCase();
+        return an < bn ? -1 : an > bn ? 1 : 0;
+      });
+
+      apps.list = all;
+      apps.totalPages = Math.max(1, Math.ceil(apps.list.length / apps.perPage));
+      if (apps.page >= apps.totalPages) apps.page = 0;
+    },
+
+    render: function () {
+      // clear content area from BASE first
+      for (var y = UI.CONTENT_Y0; y <= UI.CONTENT_Y1; y++) background.restoreLine(y);
+
+      apps.load();
+
+   //   print(1, UI.CONTENT_Y0, 'APPS GRID // 3x3 PAGED', COL_MAIN);
+
+      apps.y0 = UI.CONTENT_Y0 + 2;
+      apps.cellW = Math.floor(w / apps.cols);
+      if (apps.cellW < 8) apps.cellW = 8;
+
+      var startIdx = apps.page * apps.perPage;
+      var idx = startIdx;
+
+      for (var r = 0; r < apps.rows; r++) {
+        var yy = apps.y0 + r * apps.cellH;
+        if (yy > UI.CONTENT_Y1) break;
+
+        for (var col = 0; col < apps.cols; col++) {
+          var xx = col * apps.cellW;
+          var xEnd = Math.min(w, xx + apps.cellW);
+
+          // ensure cell baseline is base
+          background.restoreSegment(xx, yy, xEnd - xx);
+
+          if (idx < apps.list.length) {
+            var app = apps.list[idx];
+            app._x0 = xx;
+            app._xf = xEnd - 1;
+            app._y  = yy;
+
+            var name = app.name || '';
+            var max = Math.max(1, apps.cellW - 2);
+            if (name.length > max) name = name.substring(0, max);
+
+            print(xx, yy, '_' + name.substring(0, Math.max(1, apps.cellW - 2)), COL_DIM);
+            print(xx + 1, yy, name.substring(0, 1), COL_MAIN);
+            idx++;
+          } else {
+            print(xx, yy, '________', COL_BG2);
+          }
+        }
+      }
+
+      var hy = Math.min(UI.CONTENT_Y1, apps.y0 + apps.rows * apps.cellH + 1);
+      if (hy <= UI.CONTENT_Y1) {
+        background.restoreLine(hy);
+       // print(1, hy, '[MENU] switch back with top button', COL_DIM);
+      }
+    },
+
+    onTouch: function (x, y) {
+      var startIdx = apps.page * apps.perPage;
+      var endIdx = Math.min(apps.list.length, startIdx + apps.perPage);
+
+      for (var i = startIdx; i < endIdx; i++) {
+        var app = apps.list[i];
+        if (!app) continue;
+        if (app._y === y && x >= app._x0 && x <= app._xf) {
+          background.restoreSegment(app._x0, app._y, (app._xf - app._x0 + 1));
+          print(app._x0, app._y, '_' + (app.name || '').substring(0, Math.max(1, apps.cellW - 2)), COL_WARN);
+          ap37.openApp(app.id);
+          return;
+        }
+      }
+    }
+  };
+// ====================================================
+// PAGER (2 ROWS) - BIG PADDLES
+// ====================================================
+var pager = {
+  _left: null,
+  _right: null,
+
+  render: function () {
+    // clear both pager rows
+    background.restoreLine(UI.PAGER_Y0);
+    background.restoreLine(UI.PAGER_Y0 + 1);
+
+    // "big" paddles (two lines)
+    var L1 = '◄◄◄';
+    var L2 = '◄◄◄';
+    var R1 = '►►►';
+    var R2 = '►►►';
+
+    // left paddle at x=1
+    print(1, UI.PAGER_Y0,     L1, COL_MAIN);
+    print(1, UI.PAGER_Y0 + 1, L2, COL_MAIN);
+
+    // right paddle near end
+    var rx = Math.max(1, w - R1.length - 1);
+    print(rx, UI.PAGER_Y0,     R1, COL_MAIN);
+    print(rx, UI.PAGER_Y0 + 1, R2, COL_MAIN);
+
+    // centered label across BOTH rows
+    var label = 'PAGE ' + (apps.page + 1) + '/' + apps.totalPages + '  (9/PAGE)';
+    var lx = Math.max(6, Math.floor((w - label.length) / 2));
+    print(lx, UI.PAGER_Y0,     label, COL_DIM);
+    print(lx, UI.PAGER_Y0 + 1, label, COL_DIM);
+
+    // hitboxes cover both rows + a wider x-range
+    pager._left  = { x0: 0, x1: 1 + L1.length + 2 };                 // fat hit zone
+    pager._right = { x0: rx - 2, x1: Math.min(w, rx + R1.length + 2) };
+  },
+
+  onTouch: function (x, y) {
+    if (!pager._left || !pager._right) return false;
+
+    // (y already filtered by caller)
+    if (x >= pager._left.x0 && x < pager._left.x1) {
+      apps.page = (apps.page - 1 + apps.totalPages) % apps.totalPages;
+      renderAll();
+      return true;
+    }
+
+    if (x >= pager._right.x0 && x < pager._right.x1) {
+      apps.page = (apps.page + 1) % apps.totalPages;
+      renderAll();
+      return true;
+    }
+
+    return false;
+  }
+};
+  // ====================================================
+  // GLITCHES (kept minimal here)
+  // ====================================================
+  var wordGlitch = { active:false, intervalId:null,
+    tick:0,length:0,x:0,y:0,text:[],
+    update:function(){ /* optional */ }
+  };
+  var lineGlitch = { active:false, intervalId:null,
+    tick:0,line:0,
+    update:function(){ /* optional */ }
+  };
+
+  // ====================================================
+  // UTILS
+  // ====================================================
+  function print (x, y, text, color) {
+    color = color || COL_MAIN;
+    background.saveBuffer(x, y, text, color);
+    ap37.print(x, y, text, color);
+  }
+
+  function leftPad (str, newLength, ch) {
+    str = str.toString();
+    return newLength > str.length ? new Array(newLength - str.length + 1).join(ch) + str : str;
+  }
+
+  // ====================================================
+  // GO
+  // ====================================================
+  init();
+})();
