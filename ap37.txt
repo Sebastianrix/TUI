@@ -15,6 +15,10 @@
   // SCHEMES
   // ====================================================
   var schemes = [
+    { name: 'RED ', BG:'#1a0000', BG2:'#2a0000', DIM:'#a80000', MAIN:'#ff3333', WARN:'#ff7777', GORE:'#ffaaaa' },
+    { name: 'BLUE', BG:'#000b1a', BG2:'#00122a', DIM:'#3366ff', MAIN:'#4da3ff', WARN:'#ff3333', GORE:'#99cfff' },
+    { name: 'PUR ', BG:'#14001a', BG2:'#22002a', DIM:'#9b4dff', MAIN:'#c77dff', WARN:'#ff3333', GORE:'#e0b3ff' },
+    { name: 'WHT ', BG:'#0f0f0f', BG2:'#1a1a1a', DIM:'#888888', MAIN:'#ffffff', WARN:'#ff3333', GORE:'#cccccc' },
     { name: 'PHOS', BG:'#001b12', BG2:'#002a1c', DIM:'#00a86b', MAIN:'#00ff88', WARN:'#ff3333', GORE:'#66ffcc' },
     { name: 'AMBR', BG:'#1a1200', BG2:'#2a1d00', DIM:'#d6a400', MAIN:'#ffcc33', WARN:'#ff3333', GORE:'#ffe39a' },
     { name: 'ICE ', BG:'#00131a', BG2:'#001f2a', DIM:'#29c7ff', MAIN:'#7ee8ff', WARN:'#ff3355', GORE:'#b6fff5' },
@@ -70,7 +74,7 @@ function computeLayout() {
   // ====================================================
   var state = {
     view: 'apps',          // 'menu' | 'apps'
-    schemeIndex: 2,        // ICE
+    schemeIndex: 0,        // ICE
     bgMode: 2,             // 0 FLAT, 1 GRAIN, 2 GLIT
     fx: true,
     wordGlitch: false,
